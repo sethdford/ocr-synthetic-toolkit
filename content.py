@@ -28,11 +28,18 @@ def _get_client(client: Optional[anthropic.Anthropic] = None) -> anthropic.Anthr
 
 
 def _parse_json(text: str) -> dict:
-    """Parse JSON from an LLM response, stripping markdown code fences."""
-    # Strip ```json ... ``` wrappers
+    """Parse JSON from an LLM response, stripping markdown code fences and prose."""
     text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+    # Extract content between code fences if present
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    # Fallback: find the outermost { ... } block
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1:
+            text = text[start:end + 1]
     return json.loads(text)
 
 
@@ -58,6 +65,18 @@ def _generate(
             last_error = e
             if attempt < retries - 1:
                 time.sleep(1)
+                continue
+        except (
+            anthropic.RateLimitError,
+            anthropic.InternalServerError,
+            anthropic.APIConnectionError,
+            anthropic.APITimeoutError,
+        ) as e:
+            last_error = e
+            wait = 2 ** attempt
+            print(f"    API error ({type(e).__name__}), retrying in {wait}s...")
+            if attempt < retries - 1:
+                time.sleep(wait)
                 continue
             raise ValueError(
                 f"Failed to parse JSON after {retries} attempts: {last_error}"

@@ -83,11 +83,10 @@ def render_invoice(data: dict[str, Any]) -> tuple[bytes, str]:
     c.setFont("Helvetica", 10)
     inv_num = f"Invoice #: {data.get('invoice_number', '0001')}"
     c.drawString(MARGIN, y, inv_num)
-    gt_lines.append(inv_num)
 
     date_str = f"Date: {data.get('date', '2025-01-15')}"
     c.drawString(PAGE_W / 2, y, date_str)
-    gt_lines.append(date_str)
+    gt_lines.append(f"{inv_num}  {date_str}")
     y -= 28
 
     # --- Bill To ---
@@ -126,8 +125,20 @@ def render_invoice(data: dict[str, Any]) -> tuple[bytes, str]:
 
     c.setFont("Helvetica", 10)
     subtotal = 0.0
+    max_desc_width = col_qty - col_desc - 10
     for item in data.get("line_items", []):
+        if y < MARGIN + 40:
+            c.showPage()
+            y = PAGE_H - MARGIN
+            c.setFont("Helvetica", 10)
+
         desc = str(item.get("description", "Item"))
+        # Truncate description to fit before Qty column
+        if c.stringWidth(desc, "Helvetica", 10) > max_desc_width:
+            while len(desc) > 1 and c.stringWidth(desc + "...", "Helvetica", 10) > max_desc_width:
+                desc = desc[:-1]
+            desc = desc.rstrip() + "..."
+
         qty = item.get("quantity", 1)
         price = item.get("unit_price", 0.0)
         line_total = qty * price
@@ -392,6 +403,11 @@ def render_receipt(data: dict[str, Any]) -> tuple[bytes, str]:
     # Items
     c.setFont("Courier", 8)
     for item in data.get("items", []):
+        if y < margin + 30:
+            c.showPage()
+            y = receipt_h - margin
+            c.setFont("Courier", 8)
+
         name = str(item.get("name", "Item"))[:20]
         price = item.get("price", 0.0)
         price_str = f"${price:.2f}"
@@ -476,12 +492,16 @@ def apply_blur(img: Image.Image, radius: float = 1.0) -> Image.Image:
     return img.filter(ImageFilter.GaussianBlur(radius=radius))
 
 
-def apply_noise(img: Image.Image, sigma: float = 10.0) -> Image.Image:
+def apply_noise(
+    img: Image.Image, sigma: float = 10.0, rng: Optional[np.random.Generator] = None,
+) -> Image.Image:
     """Add Gaussian noise to simulate scanner sensor noise."""
     if sigma <= 0:
         return img
+    if rng is None:
+        rng = np.random.default_rng()
     arr = np.array(img, dtype=np.float32)
-    noise = np.random.normal(0, sigma, arr.shape).astype(np.float32)
+    noise = rng.normal(0, sigma, arr.shape).astype(np.float32)
     arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
     return Image.fromarray(arr)
 
@@ -512,10 +532,8 @@ def apply_ink_bleed(img: Image.Image, amount: float = 1.0) -> Image.Image:
     if amount <= 0:
         return img
 
-    kernel_size = max(1, int(round(amount)))
-    # Make kernel odd
-    if kernel_size % 2 == 0:
-        kernel_size += 1
+    # Minimum useful kernel is 3x3; map amount to odd kernel sizes
+    kernel_size = 2 * max(1, int(math.ceil(amount))) + 1
 
     if HAS_CV2:
         arr = np.array(img)
@@ -539,6 +557,7 @@ def degrade_image(
     rotation: float = 0.3,
     jpeg_quality: int = 80,
     ink_bleed: float = 0.0,
+    seed: Optional[int] = None,
 ) -> Image.Image:
     """Apply a composable degradation pipeline to simulate a scanned document.
 
@@ -549,13 +568,15 @@ def degrade_image(
         rotation: Rotation angle in degrees.
         jpeg_quality: JPEG re-compression quality (1-100).
         ink_bleed: Ink bleed / morphological dilation amount.
+        seed: Random seed for reproducible noise.
 
     Returns:
         Degraded PIL Image.
     """
+    rng = np.random.default_rng(seed)
     img = img.convert("RGB")
     img = apply_blur(img, blur)
-    img = apply_noise(img, noise)
+    img = apply_noise(img, noise, rng=rng)
     img = apply_rotation(img, rotation)
     img = apply_jpeg_artifacts(img, jpeg_quality)
     img = apply_ink_bleed(img, ink_bleed)

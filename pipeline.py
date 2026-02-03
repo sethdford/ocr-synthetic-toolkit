@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,10 +22,8 @@ from confusions import (
     compute_cer,
     compute_wer,
     inject_errors,
-    generate_multi_level_pairs,
 )
 from templates import (
-    RENDERERS,
     degrade_image,
     pdf_to_images,
     render_document,
@@ -90,7 +86,8 @@ def process_document(
 
     degraded_image = None
     if base_image is not None:
-        degraded_image = degrade_image(base_image, **degradation_params)
+        deg_seed = (seed * 1000 + doc_index) if seed is not None else None
+        degraded_image = degrade_image(base_image, seed=deg_seed, **degradation_params)
         degraded_image.save(str(doc_dir / "degraded.png"), format="PNG")
 
     # Step 3: Per error-level processing
@@ -101,7 +98,7 @@ def process_document(
         level_dir.mkdir(exist_ok=True)
 
         # Inject text errors at this level
-        level_seed = (seed * 1000 + doc_index * 100 + int(level * 10)) if seed else None
+        level_seed = (seed * 1000 + doc_index * 100 + int(level * 10)) if seed is not None else None
         noisy_text = inject_errors(ground_truth, error_level=level, seed=level_seed)
         (level_dir / "noisy_text.txt").write_text(noisy_text, encoding="utf-8")
 
@@ -241,9 +238,17 @@ Examples:
                 all_content = json.load(f)
             # Handle both list and dict-of-lists formats
             if isinstance(all_content, dict):
-                content_list = all_content.get(doc_type, all_content.get("documents", []))
+                content_list = all_content.get(doc_type, [])
+                if not content_list:
+                    print(f"  Warning: no '{doc_type}' key in {args.input_json}, skipping",
+                          file=sys.stderr)
+                    continue
             else:
                 content_list = all_content
+            if len(content_list) < args.count:
+                print(f"  Warning: JSON has {len(content_list)} items but "
+                      f"--count is {args.count}; processing {len(content_list)}",
+                      file=sys.stderr)
             content_list = content_list[:args.count]
         else:
             print(f"  Generating {args.count} {doc_type} document(s) via API...")

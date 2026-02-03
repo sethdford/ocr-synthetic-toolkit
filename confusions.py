@@ -116,11 +116,8 @@ def inject_errors(
 
     rng = random.Random(seed)
 
-    # Scale the confusion matrix to roughly hit the target error level.
-    # The base matrix was tuned for ~3% CER, so we scale relative to that.
     if confusion_matrix is None:
-        scale = error_level / 3.0
-        confusion_matrix = scale_confusions(DEFAULT_CONFUSIONS, scale)
+        confusion_matrix = DEFAULT_CONFUSIONS
 
     # Per-character error probability to reach target CER
     p_error = error_level / 100.0
@@ -136,10 +133,15 @@ def inject_errors(
         roll = rng.random()
 
         if roll < p_sub:
-            # Substitution
+            # Substitution — always produce a different character
             if ch in confusion_matrix:
-                replacement = _weighted_choice(confusion_matrix[ch], rng)
-                result.append(replacement)
+                non_self = {k: v for k, v in confusion_matrix[ch].items() if k != ch}
+                if non_self:
+                    replacement = _weighted_choice(non_self, rng)
+                    result.append(replacement)
+                else:
+                    candidates = [c for c in printable if c != ch]
+                    result.append(rng.choice(candidates) if candidates else ch)
             else:
                 # Random substitution from printable chars (excluding self)
                 candidates = [c for c in printable if c != ch]
